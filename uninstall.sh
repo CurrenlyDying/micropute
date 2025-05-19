@@ -41,4 +41,14 @@ else
     echo "Keeping log file at /var/log/mic_recorder.log"
 fi
 
+# Inform about manual package removals
+echo ""
+echo "Note: The following packages were installed as dependencies and can be removed"
+echo "manually if no longer needed:"
+echo "- portaudio19-dev"
+echo "- libasound2-dev"
+echo ""
+echo "To remove them, run: sudo apt-get remove portaudio19-dev libasound2-dev"
+echo ""
+
 echo "Uninstallation complete!" 

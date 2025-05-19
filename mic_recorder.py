@@ -4,9 +4,10 @@ import os
 import signal
 import time
 import datetime
-import wave
 import logging
-import pyaudio
+import sounddevice as sd
+from scipy.io.wavfile import write
+import numpy as np
 
 # Configure logging
 logging.basicConfig(
@@ -18,12 +19,11 @@ logging.basicConfig(
 logger = logging.getLogger('mic_recorder')
 
 # Audio recording parameters
-CHUNK = 1024
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 44100
+RATE = 44100  # Sample rate (Hz)
+CHANNELS = 1  # Mono recording
 OUTPUT_DIR = '/var/lib/mic_recorder'
 SEGMENT_DURATION_SECONDS = 30 * 60  # 30 minutes
+CHUNK_DURATION = 5  # 5 seconds per chunk
 
 # Ensure the output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -45,122 +45,162 @@ def get_timestamp():
     """Generate a timestamp for filenames"""
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+def list_audio_devices():
+    """List all available audio devices and log them"""
+    try:
+        devices = sd.query_devices()
+        logger.info("Available audio devices:")
+        
+        input_devices = []
+        for i, device in enumerate(devices):
+            device_info = f"Device {i}: {device['name']}, inputs: {device['max_input_channels']}"
+            logger.info(device_info)
+            
+            if device['max_input_channels'] > 0:
+                input_devices.append((i, device['name'], device['max_input_channels']))
+        
+        return input_devices
+    except Exception as e:
+        logger.error(f"Error listing audio devices: {e}")
+        return []
+
+def find_best_input_device():
+    """Find the best available input device"""
+    try:
+        input_devices = list_audio_devices()
+        
+        if not input_devices:
+            logger.error("No input devices found")
+            return None
+        
+        # Try to get the default input device
+        try:
+            default_device = sd.query_devices(kind='input')
+            default_id = default_device['index']
+            logger.info(f"Default input device: {default_id} - {default_device['name']}")
+            
+            # Check if default device has inputs
+            if default_device['max_input_channels'] > 0:
+                return default_id
+        except Exception as e:
+            logger.warning(f"Could not determine default input device: {e}")
+        
+        # If no default or default has no inputs, use the first available input device
+        logger.info(f"Using first available input device: {input_devices[0][0]} - {input_devices[0][1]}")
+        return input_devices[0][0]  # Return the device ID of the first input device
+        
+    except Exception as e:
+        logger.error(f"Error finding input device: {e}")
+        return None
+
+def record_segment(device_id, duration, output_path):
+    """Record audio for specified duration using shorter segments"""
+    try:
+        logger.info(f"Starting recording to {output_path} using device {device_id}")
+        
+        # We'll record in smaller chunks to be able to stop recording on signal
+        total_chunks = int(duration / CHUNK_DURATION)
+        all_recordings = []
+        
+        logger.info(f"Recording started for up to {duration} seconds...")
+        segment_start_time = time.time()
+        
+        for chunk in range(total_chunks):
+            if not keep_recording:
+                logger.info("Recording stopped due to signal.")
+                break
+                
+            # Record a smaller chunk
+            chunk_frames = int(CHUNK_DURATION * RATE)
+            try:
+                # Use blocking mode for simplicity
+                recording_chunk = sd.rec(
+                    frames=chunk_frames,
+                    samplerate=RATE,
+                    channels=CHANNELS,
+                    device=device_id,
+                    blocking=True
+                )
+                all_recordings.append(recording_chunk)
+                
+                # Only log every 12 chunks (approximately every minute) to avoid log spam
+                if chunk % 12 == 0 or chunk == total_chunks - 1:
+                    logger.info(f"Recorded chunk {chunk+1}/{total_chunks} (approx. {(chunk+1)*CHUNK_DURATION/60:.1f} minutes)")
+            except Exception as e:
+                logger.error(f"Error recording chunk {chunk+1}: {e}")
+                # Continue to next chunk
+        
+        # Calculate actual recording duration and combine chunks
+        actual_duration = min(duration, time.time() - segment_start_time)
+        logger.info(f"Recorded for {actual_duration:.2f} seconds, combining chunks...")
+        
+        if not all_recordings:
+            logger.error("No audio was recorded")
+            return False
+            
+        # Combine all chunks
+        complete_recording = np.vstack(all_recordings)
+        
+        # Normalize the audio to prevent clipping
+        max_val = np.max(np.abs(complete_recording))
+        if max_val > 0:  # Avoid division by zero
+            normalized_recording = complete_recording * (0.9 / max_val)
+        else:
+            normalized_recording = complete_recording
+        
+        # Convert to int16 format
+        scaled = np.int16(normalized_recording * 32767)
+        
+        # Save to WAV file
+        write(output_path, RATE, scaled)
+        
+        logger.info(f"Successfully saved recording to {output_path}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error during recording: {e}", exc_info=True)
+        return False
+
 def record_audio():
     """Main recording function, creates a new file every SEGMENT_DURATION_SECONDS."""
-    p = None
-    stream = None
-    current_wf = None
-    current_wav_file_path = None # Stores the path of the currently open WAV file
-
+    global keep_recording
+    
     try:
-        p = pyaudio.PyAudio()
-        logger.info("Starting audio recording service.")
-
-        # Open stream once at the beginning
-        stream = p.open(format=FORMAT,
-                        channels=CHANNELS,
-                        rate=RATE,
-                        input=True,
-                        frames_per_buffer=CHUNK)
-        logger.info("Audio stream opened successfully.")
-
-        # Outer loop: continues as long as keep_recording is True, creating new segments
+        # Find a suitable input device
+        device_id = find_best_input_device()
+        if device_id is None:
+            logger.critical("No suitable input device found, cannot record audio")
+            return
+        
+        logger.info(f"Starting audio recording service using device {device_id}")
+        
+        # Continue recording segments until told to stop
         while keep_recording:
             timestamp = get_timestamp()
-            current_wav_file_path = os.path.join(OUTPUT_DIR, f"recording_{timestamp}.wav")
+            output_path = os.path.join(OUTPUT_DIR, f"recording_{timestamp}.wav")
             
-            segment_frames = [] # Temporary store for current segment's frames, if needed for retry, but wave module writes directly
+            # Record a segment
+            success = record_segment(device_id, SEGMENT_DURATION_SECONDS, output_path)
             
-            try: # Try block for operations related to a single segment file
-                current_wf = wave.open(current_wav_file_path, 'wb')
-                current_wf.setnchannels(CHANNELS)
-                current_wf.setsampwidth(p.get_sample_size(FORMAT))
-                current_wf.setframerate(RATE)
-                
-                logger.info(f"Recording new segment to {current_wav_file_path}")
-                segment_start_time = time.time()
-                
-                # Inner loop: records data for the current segment
-                while keep_recording:
-                    try:
-                        data = stream.read(CHUNK, exception_on_overflow=False)
-                        current_wf.writeframes(data)
-                    except IOError as e:
-                        # This error type can occur if the stream is closed or encounters a serious issue.
-                        logger.error(f"Stream read IOError while recording to {current_wav_file_path}: {e}. Attempting to stop.", exc_info=True)
-                        global keep_recording # Modifying global
-                        keep_recording = False # Signal to stop all recording activities
-                        # Re-raise to be caught by the segment's exception handler, which will close the current file.
-                        raise
-                    except Exception as e_read:
-                        logger.error(f"Unexpected error during stream.read() for {current_wav_file_path}: {e_read}", exc_info=True)
-                        # Depending on the error, might want to stop or try to continue with a new segment.
-                        # For now, let this error propagate to the segment error handler.
-                        raise
-
-
-                    # Check if segment duration is reached
-                    if time.time() - segment_start_time >= SEGMENT_DURATION_SECONDS:
-                        logger.info(f"Segment duration ({SEGMENT_DURATION_SECONDS // 60} min) reached for {current_wav_file_path}.")
-                        break # Break inner loop to close this segment and start a new one
-                
-                # End of inner loop (either due to segment duration or keep_recording becoming False)
-
-            except Exception as e_segment:
-                # This catches errors from wave.open, stream.read (if re-raised), or writeframes.
-                logger.error(f"Error during processing of segment {current_wav_file_path}: {e_segment}", exc_info=True)
-                # If keep_recording became false due to this error, the outer loop will terminate.
-            finally:
-                if current_wf:
-                    try:
-                        current_wf.close()
-                        logger.info(f"Segment successfully saved and closed: {current_wav_file_path}")
-                    except Exception as e_close:
-                        logger.error(f"Error closing wave file {current_wav_file_path}: {e_close}", exc_info=True)
-                    current_wf = None # Ensure it's reset
-                    current_wav_file_path = None # Reset path after closing
-            
+            # If recording was stopped by a signal, exit loop
             if not keep_recording:
-                logger.info("Stop signal received or critical error occurred, exiting main recording loop.")
-                break # Break outer loop
-
-    except pyaudio.PaError as pa_err:
-        logger.critical(f"PyAudio error: {pa_err}. This often means an issue with the audio device.", exc_info=True)
-        # PyAudio might not have initialized, so p might be None or p.terminate() might fail.
-    except Exception as e_main:
-        logger.critical(f"A critical error occurred in the main recording function: {e_main}", exc_info=True)
+                logger.info("Recording stopped by signal.")
+                break
+                
+            # If recording failed for some other reason, wait a bit and try again
+            if not success:
+                logger.warning("Segment recording failed, waiting 5 seconds before retrying.")
+                time.sleep(5)
+                
+                # Try to find a device again in case it was disconnected/reconnected
+                device_id = find_best_input_device()
+                if device_id is None:
+                    logger.critical("No suitable input device found after failure, stopping recording service")
+                    break
+    
+    except Exception as e:
+        logger.critical(f"A critical error occurred in the main recording function: {e}", exc_info=True)
     finally:
-        logger.info("Cleaning up resources...")
-
-        # Ensure the last wave file is closed if it's still open due to an unhandled exit path
-        # (though the segment's finally should have handled it)
-        if current_wf is not None: # Check if current_wf was assigned and not reset
-            logger.warning(f"Main finally: current_wf for {current_wav_file_path or 'unknown segment'} was not None. Attempting to close.")
-            try:
-                # Check if it has a close method and isn't already marked closed by wave module internals
-                if hasattr(current_wf, 'close') and not getattr(current_wf, '_is_closed', True): # _is_closed is internal
-                    current_wf.close()
-                    logger.info(f"Closed lingering wave file {current_wav_file_path or 'unknown segment'} in main finally.")
-            except Exception as e_final_wf_close:
-                logger.error(f"Error during final attempt to close wave file {current_wav_file_path or 'unknown segment'}: {e_final_wf_close}")
-
-        if stream is not None:
-            try:
-                if stream.is_active():
-                    logger.info("Stopping audio stream.")
-                    stream.stop_stream()
-                logger.info("Closing audio stream.")
-                stream.close()
-            except Exception as e_stream_cleanup:
-                logger.error(f"Error during stream cleanup: {e_stream_cleanup}", exc_info=True)
-        
-        if p is not None:
-            try:
-                logger.info("Terminating PyAudio instance.")
-                p.terminate()
-            except Exception as e_pyaudio_cleanup:
-                logger.error(f"Error during PyAudio termination: {e_pyaudio_cleanup}", exc_info=True)
-        
         logger.info("Recording service stopped.")
 
 if __name__ == "__main__":
