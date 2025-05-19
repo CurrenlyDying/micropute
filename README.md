@@ -9,6 +9,7 @@ A Linux service that continuously records audio from the microphone and saves it
 - Saves audio as a single WAV file for the entire recording session
 - Handles service stops gracefully without corrupting files
 - Automatically restarts if crashed
+- Uses a virtual environment to avoid conflicts with system Python
 
 ## Requirements
 
@@ -48,8 +49,12 @@ When you start the service, it begins recording. When you stop the service, it c
 
 ## Configuration
 
-Edit `/usr/local/bin/mic_recorder.py` to change settings:
+Edit the main script to change settings:
+```
+sudo nano /opt/mic_recorder/mic_recorder.py
+```
 
+You can modify these parameters:
 - `CHANNELS`: Number of audio channels (1 for mono, 2 for stereo)
 - `RATE`: Sample rate in Hz (default: 44100)
 - `OUTPUT_DIR`: Where to save recordings (default: `/var/lib/mic_recorder`)
@@ -73,7 +78,7 @@ To remove the service:
 sudo systemctl stop mic_recorder
 sudo systemctl disable mic_recorder
 sudo rm /etc/systemd/system/mic_recorder.service
-sudo rm /usr/local/bin/mic_recorder.py
+sudo rm -rf /opt/mic_recorder
 sudo systemctl daemon-reload
 ```
 

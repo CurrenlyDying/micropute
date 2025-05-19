@@ -5,25 +5,48 @@ set -e
 
 echo "Installing mic_recorder service..."
 
-# Install required packages
-echo "Installing dependencies..."
+# Install required system packages
+echo "Installing system dependencies..."
 apt-get update
-apt-get install -y python3 python3-pip portaudio19-dev
+apt-get install -y python3 python3-venv python3-full portaudio19-dev
 
-# Install Python dependencies
-echo "Installing Python packages..."
-pip3 install pyaudio
-
-# Create required directories
+# Create directories
 echo "Setting up directories..."
 mkdir -p /var/lib/mic_recorder
 mkdir -p /var/log
+INSTALL_DIR="/opt/mic_recorder"
+mkdir -p $INSTALL_DIR
 
-# Copy files to their locations
-echo "Installing application files..."
-cp mic_recorder.py /usr/local/bin/
-chmod +x /usr/local/bin/mic_recorder.py
-cp mic_recorder.service /etc/systemd/system/
+# Copy application files
+echo "Copying application files..."
+cp mic_recorder.py $INSTALL_DIR/
+
+# Create virtual environment and install dependencies
+echo "Creating virtual environment and installing Python dependencies..."
+python3 -m venv $INSTALL_DIR/venv
+$INSTALL_DIR/venv/bin/pip install pyaudio
+
+# Create the systemd service file
+echo "Creating systemd service file..."
+cat > /etc/systemd/system/mic_recorder.service << EOF
+[Unit]
+Description=Microphone Audio Recording Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/mic_recorder.py
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=mic_recorder
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 # Reload systemd and enable service
 echo "Enabling service..."
