@@ -34,7 +34,7 @@ sudo bash install.sh
 1.  Clone the repository:
 
     ```bash
-    git clone https://www.google.com/search?q=https://github.com/CurrenlyDying/micropute.git
+    git clone https://github.com/CurrenlyDying/micropute.git
     cd micropute
     ```
 
