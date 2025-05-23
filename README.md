@@ -1,87 +1,128 @@
-# MicRecorder
+# 🎤 MicRecorder
 
-A Linux service that continuously records audio from the microphone and saves it as a single WAV file.
+MicRecorder is a Linux service for continuous background audio recording from a microphone. It saves recordings in segmented WAV files and includes features like automatic restart on failure, disk space checking, and robust error handling.
 
-## Features
+## ✨ Features
 
-- Runs as a systemd service in the background
-- Records audio from the system microphone
-- Saves audio as a single WAV file for the entire recording session
-- Handles service stops gracefully without corrupting files
-- Automatically restarts if crashed
-- Uses a virtual environment to avoid conflicts with system Python
+  * ⚙️ Runs as a systemd service.
+  * 🎙️ Records from the default or a preferred audio input device.
+  * 💾 Saves audio in configurable WAV segments (e.g., 30-minute files).
 
-## Requirements
+## 📋 Prerequisites
 
-- Linux system with systemd
-- Python 3
-- Root access for service installation
+  * 🐧 Linux system with systemd
+  * 🐍 Python 3.7+
+  * 🔑 Root privileges for installation and service management.
+  * 🌐 `curl` (for the one-line installation method) or `git` (for manual installation).
 
-## Installation
+## 🚀 Installation
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/CurrenlyDying/micropute
-   cd micropute
-   ```
+### One-Line Install (using curl)
 
-2. Run the installer script as root:
-   ```
-   sudo bash install.sh
-   ```
+Ensure `curl` is installed (`sudo apt install curl` if not).
 
-3. Start the service:
-   ```
-   sudo systemctl start mic_recorder
-   ```
-
-## Usage
-
-The service runs in the background and requires no interaction:
-
-- Start recording: `sudo systemctl start mic_recorder`
-- Stop recording: `sudo systemctl stop mic_recorder`
-- Check status: `sudo systemctl status mic_recorder`
-- Enable at boot: `sudo systemctl enable mic_recorder` (done by installer)
-- Disable at boot: `sudo systemctl disable mic_recorder`
-
-When you start the service, it begins recording. When you stop the service, it completes the WAV file and closes it properly.
-
-## Configuration
-
-Edit the main script to change settings:
-```
-sudo nano /opt/mic_recorder/mic_recorder.py
+```bash
+mkdir -p micropute && cd micropute && \
+curl -sLO https://raw.githubusercontent.com/CurrenlyDying/micropute/main/install.sh && \
+curl -sLO https://raw.githubusercontent.com/CurrenlyDying/micropute/main/mic_recorder.py && \
+chmod +x install.sh && \
+sudo bash install.sh
 ```
 
-You can modify these parameters:
-- `CHANNELS`: Number of audio channels (1 for mono, 2 for stereo)
-- `RATE`: Sample rate in Hz (default: 44100)
-- `OUTPUT_DIR`: Where to save recordings (default: `/var/lib/mic_recorder`)
+### Manual Installation (using git)
 
-After changing, restart the service:
-```
+1.  Clone the repository:
+
+    ```bash
+    git clone https://www.google.com/search?q=https://github.com/CurrenlyDying/micropute.git
+    cd micropute
+    ```
+
+    *(The `chmod +x install.sh` command is usually not needed for files cloned via git that already have execute permissions, but can be run if necessary.)*
+
+2.  Run the installation script as root:
+
+    ```bash
+    sudo bash install.sh
+    ```
+
+The script handles dependency installation (if `requirements.txt` is present and handled by `install.sh`), directory setup, virtual environment creation, and systemd service configuration.
+
+## ▶️ Usage
+
+Manage the service using `systemctl`:
+
+  * **Start service:**
+    ```bash
+    sudo systemctl start mic_recorder
+    ```
+  * **Stop service:**
+    ```bash
+    sudo systemctl stop mic_recorder
+    ```
+  * **Check service status:**
+    ```bash
+    sudo systemctl status mic_recorder
+    ```
+  * **Enable auto-start on boot:**
+    ```bash
+    sudo systemctl enable mic_recorder
+    ```
+  * **Disable auto-start on boot** (installer do this):
+    ```bash
+    sudo systemctl disable mic_recorder
+    ```
+  * **Restart service** (e.g., after configuration changes):
+    ```bash
+    sudo systemctl restart mic_recorder
+    ```
+
+## 🎧 Recorded Files
+
+Audio segments are saved in the `OUTPUT_DIR` (default: `/var/lib/mic_recorder/`) with filenames like `recording_YYYYMMDD_HHMMSS.wav`.
+
+## ⚙️ Configuration
+
+Key parameters can be modified at the beginning of the `/opt/mic_recorder/mic_recorder.py` script.
+
+Editable parameters include:
+
+  * `RATE`: Sample rate (default: `44100` Hz).
+  * `CHANNELS`: Audio channels (1 for mono, 2 for stereo).
+  * `OUTPUT_DIR`: Directory for recordings (default: `"/var/lib/mic_recorder/"`).
+  * `SEGMENT_DURATION_SECONDS`: Duration of each audio segment (default: `1800`s / 30 minutes).
+  * `CHUNK_DURATION_SECONDS`: Duration of in-memory recording chunks before writing to disk (default: `5`s).
+  * `PREFERRED_DEVICE_NAME_SUBSTRING`: Substring of preferred device name (empty or `None` for auto-select based on `pyaudio`'s default).
+  * `LOG_FILE`: Service log file path (default: `"/var/log/mic_recorder.log"`).
+  * `LOG_LEVEL`: Logging verbosity (e.g., `logging.INFO`, `logging.DEBUG`).
+  * `MIN_FREE_DISK_SPACE_MB`: Minimum free disk space (MB) required to continue recording.
+  * And others related to retry logic and pauses (e.g., `RETRY_DELAY_SECONDS`, `MAX_RETRIES`).
+
+**Important:** Restart the service after any configuration changes:
+
+```bash
 sudo systemctl restart mic_recorder
 ```
 
-## Logs
+## 📜 Logging
 
-Service logs are stored in `/var/log/mic_recorder.log` and can be viewed with:
-```
-sudo tail -f /var/log/mic_recorder.log
-```
+  * **Service Logs:** `/var/log/mic_recorder.log` (or as configured by `LOG_FILE`).
+      * View live logs:
+        ```bash
+        sudo tail -f /var/log/mic_recorder.log
+        ```
+  * **Installation/Uninstallation Logs:** `/tmp/mic_recorder_install.log` and `/tmp/mic_recorder_uninstall.log` (generated by the `install.sh` and `uninstall.sh` scripts for troobleshooting).
 
-## Uninstallation
+## 🗑️ Uninstallation
 
-To remove the service:
-```
-sudo systemctl stop mic_recorder
-sudo systemctl disable mic_recorder
-sudo rm /etc/systemd/system/mic_recorder.service
-sudo rm -rf /opt/mic_recorder
-sudo systemctl daemon-reload
-```
+1.  Navigate to the directory where `uninstall.sh` is located.
+2.  Run the uninstallation script as root:
+    ```bash
+    sudo bash uninstall.sh
+    ```
 
-## Recordings
+The script will stop the service, remove installed files, and optionally prompt whether to remove recorded audio and service logs.
 
-Audio recordings are saved to `/var/lib/mic_recorder/` with filenames in the format `recording_YYYYMMDD_HHMMSS.wav`. Each file represents a complete recording session from service start to service stop. 
+Anyway...
+
+  * **CurrenlyDying** 
